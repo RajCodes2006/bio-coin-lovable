@@ -16,6 +16,7 @@ import ReportPage from "./pages/ReportPage";
 import AwarenessPage from "./pages/AwarenessPage";
 import AdminPage from "./pages/AdminPage";
 import NotFound from "./pages/NotFound";
+import { Analytics } from "@vercel/analytics/react";
 
 const queryClient = new QueryClient();
 
@@ -48,6 +49,7 @@ const App = () => (
           </Routes>
           <VoiceAssistant />
         </BrowserRouter>
+        <Analytics />
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
