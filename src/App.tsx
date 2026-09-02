@@ -16,6 +16,7 @@ import ReportPage from "./pages/ReportPage";
 import AwarenessPage from "./pages/AwarenessPage";
 import AdminPage from "./pages/AdminPage";
 import NotFound from "./pages/NotFound";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 const queryClient = new QueryClient();
 
@@ -48,6 +49,7 @@ const App = () => (
           </Routes>
           <VoiceAssistant />
         </BrowserRouter>
+        <SpeedInsights />
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
