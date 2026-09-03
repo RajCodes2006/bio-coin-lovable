@@ -1,6 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { supabase } from "@/lib/supabase";
 import PageHeader from "@/components/PageHeader";
+import AdminUserDetails from "@/components/admin/AdminUserDetails";
 import {
   AlertCircle,
   CheckCircle,
@@ -22,6 +28,12 @@ type ReportStatus = "Pending" | "Approved" | "Rejected";
 type FlagSeverity = "low" | "medium" | "high";
 type FlagStatus = "active" | "resolved";
 
+type RedemptionStatus =
+  | "pending"
+  | "approved"
+  | "claimed"
+  | "cancelled";
+
 interface AdminReport {
   id: string;
   user_id: string;
@@ -35,7 +47,6 @@ interface AdminReport {
   created_at: string;
   reviewed_at: string | null;
   reporter_name: string;
-  reporter_email: string;
 }
 
 interface AdminUser {
@@ -63,7 +74,7 @@ interface Redemption {
   item_id: string;
   coins_spent: number;
   redeemed_at: string;
-  status: "pending" | "approved" | "claimed" | "cancelled";
+  status: RedemptionStatus;
   user_name: string;
   reward_title: string;
 }
@@ -83,9 +94,9 @@ type Tab =
   | "overview"
   | "reports"
   | "users"
+  | "flags"
   | "rewards"
-  | "redemptions"
-  | "flags";
+  | "redemptions";
 
 const FLAG_REASONS = [
   "Fake / misleading waste report",
@@ -108,21 +119,25 @@ const AdminPage: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [resolvingFlagId, setResolvingFlagId] = useState<string | null>(
+    null
+  );
+
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
+
+  // User details
+  const [selectedUserForDetails, setSelectedUserForDetails] =
+    useState<AdminUser | null>(null);
 
   // Flag dialog
   const [flagDialogOpen, setFlagDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
   const [flagReason, setFlagReason] = useState("");
+  const [customFlagReason, setCustomFlagReason] = useState("");
   const [flagSeverity, setFlagSeverity] =
     useState<FlagSeverity>("medium");
   const [flagging, setFlagging] = useState(false);
-
-  // Resolve flag
-  const [resolvingFlagId, setResolvingFlagId] = useState<string | null>(
-    null
-  );
 
   // ----------------------------------------------------------
   // LOAD REPORTS
@@ -152,56 +167,58 @@ const AdminPage: React.FC = () => {
       .limit(200);
 
     if (error) {
-      console.error(error);
+      console.error("loadReports:", error);
       toast.error("Couldn't load reports.");
       return;
     }
 
-    const rows: AdminReport[] = (data ?? []).map((r) => {
-      const profile = r.profiles as
+    const rows: AdminReport[] = (data ?? []).map((row) => {
+      const profile = row.profiles as
         | { name?: string | null }
         | null;
 
       return {
-        id: r.id,
-        user_id: r.user_id,
-        type: String(r.type),
-        weight: Number(r.weight),
-        location: r.location,
-        description: r.description,
-        photo_path: r.photo_path,
-        status: r.status as ReportStatus,
-        coins: Number(r.coins),
-        created_at: r.created_at,
-        reviewed_at: r.reviewed_at,
-        reporter_name: profile?.name ?? "Unknown",
-        reporter_email: "",
+        id: row.id,
+        user_id: row.user_id,
+        type: String(row.type),
+        weight: Number(row.weight),
+        location: row.location,
+        description: row.description,
+        photo_path: row.photo_path,
+        status: row.status as ReportStatus,
+        coins: Number(row.coins),
+        created_at: row.created_at,
+        reviewed_at: row.reviewed_at,
+        reporter_name: profile?.name ?? "Unknown User",
       };
     });
 
     setReports(rows);
 
     const paths = rows
-      .filter((r) => r.photo_path)
-      .map((r) => r.photo_path as string);
+      .map((row) => row.photo_path)
+      .filter((path): path is string => Boolean(path));
 
-    if (paths.length > 0) {
-      const urlMap: Record<string, string> = {};
-
-      await Promise.all(
-        paths.map(async (path) => {
-          const { data: signed } = await supabase.storage
-            .from("report-photos")
-            .createSignedUrl(path, 60 * 10);
-
-          if (signed?.signedUrl) {
-            urlMap[path] = signed.signedUrl;
-          }
-        })
-      );
-
-      setPhotoUrls(urlMap);
+    if (paths.length === 0) {
+      setPhotoUrls({});
+      return;
     }
+
+    const urlMap: Record<string, string> = {};
+
+    await Promise.all(
+      paths.map(async (path) => {
+        const { data: signed } = await supabase.storage
+          .from("report-photos")
+          .createSignedUrl(path, 60 * 10);
+
+        if (signed?.signedUrl) {
+          urlMap[path] = signed.signedUrl;
+        }
+      })
+    );
+
+    setPhotoUrls(urlMap);
   }, []);
 
   // ----------------------------------------------------------
@@ -217,22 +234,22 @@ const AdminPage: React.FC = () => {
       .limit(500);
 
     if (error) {
-      console.error(error);
+      console.error("loadUsers:", error);
       toast.error("Couldn't load users.");
       return;
     }
 
-    setUsers(
-      (data ?? []).map((u) => ({
-        id: u.id,
-        name: u.name ?? "Unnamed User",
-        city: u.city ?? "Unknown",
-        bio_coins: Number(u.bio_coins ?? 0),
-        role: u.role === "admin" ? "admin" : "user",
-        is_admin: Boolean(u.is_admin),
-        member_since: u.member_since,
-      }))
-    );
+    const rows: AdminUser[] = (data ?? []).map((user) => ({
+      id: user.id,
+      name: user.name ?? "Unnamed User",
+      city: user.city ?? "Unknown",
+      bio_coins: Number(user.bio_coins ?? 0),
+      role: user.role === "admin" ? "admin" : "user",
+      is_admin: Boolean(user.is_admin),
+      member_since: user.member_since,
+    }));
+
+    setUsers(rows);
   }, []);
 
   // ----------------------------------------------------------
@@ -245,19 +262,19 @@ const AdminPage: React.FC = () => {
       .order("cost", { ascending: true });
 
     if (error) {
-      console.error(error);
+      console.error("loadRewards:", error);
       toast.error("Couldn't load rewards.");
       return;
     }
 
     setRewards(
-      (data ?? []).map((r) => ({
-        id: r.id,
-        title: r.title,
-        description: r.description,
-        cost: Number(r.cost),
-        category: r.category,
-        icon: r.icon,
+      (data ?? []).map((reward) => ({
+        id: reward.id,
+        title: reward.title,
+        description: reward.description,
+        cost: Number(reward.cost),
+        category: reward.category,
+        icon: reward.icon,
       }))
     );
   }, []);
@@ -288,29 +305,29 @@ const AdminPage: React.FC = () => {
       .limit(200);
 
     if (error) {
-      console.error(error);
+      console.error("loadRedemptions:", error);
       toast.error("Couldn't load redemptions.");
       return;
     }
 
     setRedemptions(
-      (data ?? []).map((r) => {
-        const profile = r.profiles as
+      (data ?? []).map((row) => {
+        const profile = row.profiles as
           | { name?: string | null }
           | null;
 
-        const item = r.redeem_items as
+        const item = row.redeem_items as
           | { title?: string | null }
           | null;
 
         return {
-          id: r.id,
-          user_id: r.user_id,
-          item_id: r.item_id,
-          coins_spent: Number(r.coins_spent),
-          redeemed_at: r.redeemed_at,
-          status: r.status,
-          user_name: profile?.name ?? "Unknown",
+          id: row.id,
+          user_id: row.user_id,
+          item_id: row.item_id,
+          coins_spent: Number(row.coins_spent),
+          redeemed_at: row.redeemed_at,
+          status: row.status as RedemptionStatus,
+          user_name: profile?.name ?? "Unknown User",
           reward_title: item?.title ?? "Unknown Reward",
         };
       })
@@ -330,7 +347,7 @@ const AdminPage: React.FC = () => {
       .limit(500);
 
     if (error) {
-      console.error(error);
+      console.error("loadFlags:", error);
       toast.error("Couldn't load user flags.");
       return;
     }
@@ -373,7 +390,7 @@ const AdminPage: React.FC = () => {
   ]);
 
   useEffect(() => {
-    loadAll();
+    void loadAll();
   }, [loadAll]);
 
   // ----------------------------------------------------------
@@ -405,7 +422,7 @@ const AdminPage: React.FC = () => {
   };
 
   // ----------------------------------------------------------
-  // OPEN FLAG DIALOG
+  // FLAG DIALOG
   // ----------------------------------------------------------
   const openFlagDialog = (user: AdminUser) => {
     if (user.role === "admin") {
@@ -415,8 +432,19 @@ const AdminPage: React.FC = () => {
 
     setSelectedUser(user);
     setFlagReason("");
+    setCustomFlagReason("");
     setFlagSeverity("medium");
     setFlagDialogOpen(true);
+  };
+
+  const closeFlagDialog = () => {
+    if (flagging) return;
+
+    setFlagDialogOpen(false);
+    setSelectedUser(null);
+    setFlagReason("");
+    setCustomFlagReason("");
+    setFlagSeverity("medium");
   };
 
   // ----------------------------------------------------------
@@ -425,8 +453,13 @@ const AdminPage: React.FC = () => {
   const handleFlagUser = async () => {
     if (!selectedUser) return;
 
-    if (!flagReason.trim()) {
-      toast.error("Please select or enter a reason.");
+    const finalReason =
+      flagReason === "Other"
+        ? customFlagReason.trim()
+        : flagReason.trim();
+
+    if (!finalReason) {
+      toast.error("Please provide a flag reason.");
       return;
     }
 
@@ -435,7 +468,7 @@ const AdminPage: React.FC = () => {
     try {
       const { error } = await supabase.rpc("flag_user", {
         p_user_id: selectedUser.id,
-        p_reason: flagReason,
+        p_reason: finalReason,
         p_severity: flagSeverity,
       });
 
@@ -446,11 +479,7 @@ const AdminPage: React.FC = () => {
 
       toast.success(`${selectedUser.name} has been flagged.`);
 
-      setFlagDialogOpen(false);
-      setSelectedUser(null);
-      setFlagReason("");
-      setFlagSeverity("medium");
-
+      closeFlagDialog();
       await loadFlags();
     } finally {
       setFlagging(false);
@@ -474,7 +503,6 @@ const AdminPage: React.FC = () => {
       }
 
       toast.success("Flag resolved.");
-
       await loadFlags();
     } finally {
       setResolvingFlagId(null);
@@ -482,7 +510,24 @@ const AdminPage: React.FC = () => {
   };
 
   // ----------------------------------------------------------
-  // STATISTICS
+  // HELPERS
+  // ----------------------------------------------------------
+  const getUserById = useCallback(
+    (userId: string) => users.find((user) => user.id === userId),
+    [users]
+  );
+
+  const getActiveUserFlags = useCallback(
+    (userId: string) =>
+      flags.filter(
+        (flag) =>
+          flag.user_id === userId && flag.status === "active"
+      ),
+    [flags]
+  );
+
+  // ----------------------------------------------------------
+  // STATS
   // ----------------------------------------------------------
   const stats = useMemo(() => {
     const pendingReports = reports.filter(
@@ -506,21 +551,22 @@ const AdminPage: React.FC = () => {
       .reduce((sum, r) => sum + r.coins, 0);
 
     const totalCoinsHeld = users.reduce(
-      (sum, u) => sum + u.bio_coins,
+      (sum, user) => sum + user.bio_coins,
       0
     );
 
     const totalRedeemed = redemptions.reduce(
-      (sum, r) => sum + r.coins_spent,
+      (sum, redemption) => sum + redemption.coins_spent,
       0
     );
 
     const activeFlags = flags.filter(
-      (f) => f.status === "active"
+      (flag) => flag.status === "active"
     ).length;
 
     const highSeverityFlags = flags.filter(
-      (f) => f.status === "active" && f.severity === "high"
+      (flag) =>
+        flag.status === "active" && flag.severity === "high"
     ).length;
 
     return {
@@ -541,49 +587,37 @@ const AdminPage: React.FC = () => {
   }, [reports, users, rewards, redemptions, flags]);
 
   // ----------------------------------------------------------
-  // FILTER USERS
+  // USER SEARCH
   // ----------------------------------------------------------
   const filteredUsers = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const query = search.trim().toLowerCase();
 
-    if (!q) return users;
+    if (!query) return users;
 
     return users.filter(
-      (u) =>
-        u.name.toLowerCase().includes(q) ||
-        u.city.toLowerCase().includes(q) ||
-        u.role.toLowerCase().includes(q)
+      (user) =>
+        user.name.toLowerCase().includes(query) ||
+        user.city.toLowerCase().includes(query) ||
+        user.role.toLowerCase().includes(query)
     );
   }, [users, search]);
 
   // ----------------------------------------------------------
-  // FILTER REPORTS
+  // REPORT SEARCH
   // ----------------------------------------------------------
   const filteredReports = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const query = search.trim().toLowerCase();
 
-    if (!q) return reports;
+    if (!query) return reports;
 
     return reports.filter(
-      (r) =>
-        r.reporter_name.toLowerCase().includes(q) ||
-        r.type.toLowerCase().includes(q) ||
-        r.location.toLowerCase().includes(q) ||
-        r.status.toLowerCase().includes(q)
+      (report) =>
+        report.reporter_name.toLowerCase().includes(query) ||
+        report.type.toLowerCase().includes(query) ||
+        report.location.toLowerCase().includes(query) ||
+        report.status.toLowerCase().includes(query)
     );
   }, [reports, search]);
-
-  // ----------------------------------------------------------
-  // FLAG HELPERS
-  // ----------------------------------------------------------
-  const getUserById = (userId: string) =>
-    users.find((user) => user.id === userId);
-
-  const getUserFlags = (userId: string) =>
-    flags.filter((flag) => flag.user_id === userId);
-
-  const getActiveUserFlags = (userId: string) =>
-    getUserFlags(userId).filter((flag) => flag.status === "active");
 
   const tabs: { key: Tab; label: string }[] = [
     { key: "overview", label: "Overview" },
@@ -594,6 +628,9 @@ const AdminPage: React.FC = () => {
     { key: "redemptions", label: "Redemptions" },
   ];
 
+  // ----------------------------------------------------------
+  // LOADING
+  // ----------------------------------------------------------
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
@@ -619,18 +656,24 @@ const AdminPage: React.FC = () => {
         />
 
         <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-          {/* TOP */}
+          {/* ==================================================
+              HEADER
+              ================================================== */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h2 className="text-2xl font-bold">Administration</h2>
+              <h2 className="text-2xl font-bold">
+                Administration
+              </h2>
+
               <p className="text-sm text-muted-foreground">
-                Monitor users, reports, rewards, flags and Bio-Coin
-                activity.
+                Manage users, verify reports, monitor rewards and
+                handle moderation.
               </p>
             </div>
 
             <button
-              onClick={loadAll}
+              type="button"
+              onClick={() => void loadAll()}
               className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm font-semibold"
             >
               <RefreshCw size={16} />
@@ -638,10 +681,13 @@ const AdminPage: React.FC = () => {
             </button>
           </div>
 
-          {/* TABS */}
+          {/* ==================================================
+              TABS
+              ================================================== */}
           <div className="flex gap-2 overflow-x-auto pb-1">
             {tabs.map((tab) => (
               <button
+                type="button"
                 key={tab.key}
                 onClick={() => {
                   setActiveTab(tab.key);
@@ -655,11 +701,12 @@ const AdminPage: React.FC = () => {
               >
                 {tab.label}
 
-                {tab.key === "flags" && stats.activeFlags > 0 && (
-                  <span className="ml-2 px-1.5 py-0.5 rounded-full bg-destructive/15 text-destructive text-[10px]">
-                    {stats.activeFlags}
-                  </span>
-                )}
+                {tab.key === "flags" &&
+                  stats.activeFlags > 0 && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded-full bg-destructive/15 text-destructive text-[10px]">
+                      {stats.activeFlags}
+                    </span>
+                  )}
               </button>
             ))}
           </div>
@@ -724,17 +771,20 @@ const AdminPage: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Pending Reports */}
                 <section className="lg:col-span-2 bg-card border border-border rounded-xl shadow-card overflow-hidden">
                   <div className="p-5 border-b border-border flex items-center justify-between">
                     <div>
-                      <h3 className="font-bold">Pending Reports</h3>
+                      <h3 className="font-bold">
+                        Pending Reports
+                      </h3>
+
                       <p className="text-sm text-muted-foreground">
                         Reports requiring verification
                       </p>
                     </div>
 
                     <button
+                      type="button"
                       onClick={() => setActiveTab("reports")}
                       className="text-sm font-semibold text-primary hover:underline"
                     >
@@ -746,18 +796,19 @@ const AdminPage: React.FC = () => {
                     {reports
                       .filter((r) => r.status === "Pending")
                       .slice(0, 5)
-                      .map((r) => (
+                      .map((report) => (
                         <div
-                          key={r.id}
+                          key={report.id}
                           className="p-4 flex items-center justify-between gap-4"
                         >
                           <div className="min-w-0">
                             <p className="font-semibold truncate">
-                              {r.reporter_name}
+                              {report.reporter_name}
                             </p>
 
                             <p className="text-sm text-muted-foreground truncate">
-                              {r.type} · {r.weight} kg · {r.location}
+                              {report.type} · {report.weight} kg ·{" "}
+                              {report.location}
                             </p>
                           </div>
 
@@ -775,17 +826,20 @@ const AdminPage: React.FC = () => {
                   </div>
                 </section>
 
-                {/* Flags */}
                 <section className="bg-card border border-border rounded-xl shadow-card overflow-hidden">
                   <div className="p-5 border-b border-border flex items-center justify-between">
                     <div>
-                      <h3 className="font-bold">User Flags</h3>
+                      <h3 className="font-bold">
+                        User Flags
+                      </h3>
+
                       <p className="text-sm text-muted-foreground">
                         Active moderation alerts
                       </p>
                     </div>
 
                     <button
+                      type="button"
                       onClick={() => setActiveTab("flags")}
                       className="text-sm font-semibold text-primary hover:underline"
                     >
@@ -795,13 +849,16 @@ const AdminPage: React.FC = () => {
 
                   <div className="divide-y divide-border">
                     {flags
-                      .filter((f) => f.status === "active")
+                      .filter((flag) => flag.status === "active")
                       .slice(0, 5)
                       .map((flag) => {
                         const user = getUserById(flag.user_id);
 
                         return (
-                          <div key={flag.id} className="p-4">
+                          <div
+                            key={flag.id}
+                            className="p-4"
+                          >
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 <p className="font-semibold truncate">
@@ -839,7 +896,10 @@ const AdminPage: React.FC = () => {
             <section className="bg-card border border-border rounded-xl shadow-card overflow-hidden">
               <div className="p-5 border-b border-border flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
                 <div>
-                  <h3 className="font-bold text-lg">Waste Reports</h3>
+                  <h3 className="font-bold text-lg">
+                    Waste Reports
+                  </h3>
+
                   <p className="text-sm text-muted-foreground">
                     Verify citizen cleanliness reports.
                   </p>
@@ -854,13 +914,14 @@ const AdminPage: React.FC = () => {
               </div>
 
               <div className="divide-y divide-border">
-                {filteredReports.map((r) => (
-                  <div key={r.id} className="p-5">
+                {filteredReports.map((report) => (
+                  <div key={report.id} className="p-5">
                     <div className="flex flex-col lg:flex-row gap-4">
-                      {r.photo_path && photoUrls[r.photo_path] ? (
+                      {report.photo_path &&
+                      photoUrls[report.photo_path] ? (
                         <img
-                          src={photoUrls[r.photo_path]}
-                          alt={`${r.type} waste report`}
+                          src={photoUrls[report.photo_path]}
+                          alt={`${report.type} waste report`}
                           className="w-full lg:w-40 h-40 object-cover rounded-lg"
                         />
                       ) : (
@@ -872,43 +933,54 @@ const AdminPage: React.FC = () => {
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <h4 className="font-bold text-lg">
-                            {r.type} — {r.weight} kg
+                            {report.type} — {report.weight} kg
                           </h4>
 
-                          <StatusBadge status={r.status} />
+                          <StatusBadge
+                            status={report.status}
+                          />
                         </div>
 
                         <p className="text-sm text-muted-foreground mt-1">
-                          Reported by <strong>{r.reporter_name}</strong> ·{" "}
-                          {r.location}
+                          Reported by{" "}
+                          <strong>{report.reporter_name}</strong>{" "}
+                          · {report.location}
                         </p>
 
-                        {r.description && (
+                        {report.description && (
                           <p className="text-sm mt-3 text-muted-foreground">
-                            {r.description}
+                            {report.description}
                           </p>
                         )}
 
                         <div className="flex flex-wrap gap-4 mt-3 text-sm">
                           <span className="font-semibold text-coin-foreground">
-                            +{r.coins} Bio-Coins
+                            +{report.coins} Bio-Coins
                           </span>
 
                           <span className="text-muted-foreground">
-                            {new Date(r.created_at).toLocaleString()}
+                            {new Date(
+                              report.created_at
+                            ).toLocaleString()}
                           </span>
                         </div>
 
-                        {r.status === "Pending" && (
+                        {report.status === "Pending" && (
                           <div className="flex gap-2 mt-4">
                             <button
+                              type="button"
                               onClick={() =>
-                                handleReview(r.id, "Approved")
+                                handleReview(
+                                  report.id,
+                                  "Approved"
+                                )
                               }
-                              disabled={reviewingId === r.id}
+                              disabled={
+                                reviewingId === report.id
+                              }
                               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-success text-success-foreground font-semibold text-sm disabled:opacity-50"
                             >
-                              {reviewingId === r.id ? (
+                              {reviewingId === report.id ? (
                                 <Loader2
                                   size={16}
                                   className="animate-spin"
@@ -920,10 +992,16 @@ const AdminPage: React.FC = () => {
                             </button>
 
                             <button
+                              type="button"
                               onClick={() =>
-                                handleReview(r.id, "Rejected")
+                                handleReview(
+                                  report.id,
+                                  "Rejected"
+                                )
                               }
-                              disabled={reviewingId === r.id}
+                              disabled={
+                                reviewingId === report.id
+                              }
                               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-destructive text-destructive-foreground font-semibold text-sm disabled:opacity-50"
                             >
                               <XCircle size={16} />
@@ -952,9 +1030,12 @@ const AdminPage: React.FC = () => {
             <section className="bg-card border border-border rounded-xl shadow-card overflow-hidden">
               <div className="p-5 border-b border-border flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
                 <div>
-                  <h3 className="font-bold text-lg">Users</h3>
+                  <h3 className="font-bold text-lg">
+                    User Management
+                  </h3>
+
                   <p className="text-sm text-muted-foreground">
-                    Manage users and monitor moderation status.
+                    View users, inspect activity, and flag suspicious accounts.
                   </p>
                 </div>
 
@@ -970,32 +1051,48 @@ const AdminPage: React.FC = () => {
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50">
                     <tr className="text-left">
-                      <th className="px-5 py-3 font-semibold">Name</th>
-                      <th className="px-5 py-3 font-semibold">City</th>
-                      <th className="px-5 py-3 font-semibold">Role</th>
+                      <th className="px-5 py-3 font-semibold">
+                        Name
+                      </th>
+
+                      <th className="px-5 py-3 font-semibold">
+                        City
+                      </th>
+
+                      <th className="px-5 py-3 font-semibold">
+                        Role
+                      </th>
+
                       <th className="px-5 py-3 font-semibold">
                         Bio-Coins
                       </th>
+
                       <th className="px-5 py-3 font-semibold">
                         Flags
                       </th>
+
                       <th className="px-5 py-3 font-semibold">
                         Joined
                       </th>
+
                       <th className="px-5 py-3 font-semibold">
-                        Action
+                        Actions
                       </th>
                     </tr>
                   </thead>
 
                   <tbody className="divide-y divide-border">
-                    {filteredUsers.map((u) => {
-                      const activeFlags = getActiveUserFlags(u.id);
-                      const hasActiveFlag = activeFlags.length > 0;
+                    {filteredUsers.map((user) => {
+                      const activeFlags = getActiveUserFlags(
+                        user.id
+                      );
+
+                      const hasActiveFlag =
+                        activeFlags.length > 0;
 
                       return (
                         <tr
-                          key={u.id}
+                          key={user.id}
                           className={`hover:bg-muted/30 ${
                             hasActiveFlag
                               ? "bg-destructive/5"
@@ -1010,28 +1107,29 @@ const AdminPage: React.FC = () => {
                                   className="text-destructive"
                                 />
                               )}
-                              {u.name}
+
+                              {user.name}
                             </div>
                           </td>
 
                           <td className="px-5 py-4 text-muted-foreground">
-                            {u.city}
+                            {user.city}
                           </td>
 
                           <td className="px-5 py-4">
                             <span
                               className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                u.role === "admin"
+                                user.role === "admin"
                                   ? "bg-primary/15 text-primary"
                                   : "bg-muted text-muted-foreground"
                               }`}
                             >
-                              {u.role}
+                              {user.role}
                             </span>
                           </td>
 
                           <td className="px-5 py-4 font-bold text-coin-foreground">
-                            {u.bio_coins.toLocaleString()}
+                            {user.bio_coins.toLocaleString()}
                           </td>
 
                           <td className="px-5 py-4">
@@ -1049,24 +1147,37 @@ const AdminPage: React.FC = () => {
 
                           <td className="px-5 py-4 text-muted-foreground">
                             {new Date(
-                              u.member_since
+                              user.member_since
                             ).toLocaleDateString()}
                           </td>
 
                           <td className="px-5 py-4">
-                            {u.role === "admin" ? (
-                              <span className="text-xs text-muted-foreground">
-                                Protected
-                              </span>
-                            ) : (
+                            <div className="flex flex-wrap gap-2">
                               <button
-                                onClick={() => openFlagDialog(u)}
-                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 font-semibold text-xs transition-colors"
+                                type="button"
+                                onClick={() =>
+                                  setSelectedUserForDetails(
+                                    user
+                                  )
+                                }
+                                className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-opacity"
                               >
-                                <Flag size={14} />
-                                Flag User
+                                View
                               </button>
-                            )}
+
+                              {user.role !== "admin" && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openFlagDialog(user)
+                                  }
+                                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 font-semibold text-xs transition-colors"
+                                >
+                                  <Flag size={14} />
+                                  Flag
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1094,8 +1205,9 @@ const AdminPage: React.FC = () => {
                     <h3 className="font-bold text-lg">
                       User Flags
                     </h3>
+
                     <p className="text-sm text-muted-foreground">
-                      Review suspicious or problematic user activity.
+                      Review and resolve moderation alerts.
                     </p>
                   </div>
 
@@ -1103,6 +1215,7 @@ const AdminPage: React.FC = () => {
                     <p className="text-xl font-bold text-destructive">
                       {stats.activeFlags}
                     </p>
+
                     <p className="text-xs text-muted-foreground">
                       active
                     </p>
@@ -1148,7 +1261,8 @@ const AdminPage: React.FC = () => {
                             </p>
 
                             <p className="text-xs text-muted-foreground mt-1">
-                              {user?.city ?? "Unknown city"} · Flagged{" "}
+                              {user?.city ?? "Unknown city"} ·
+                              Flagged{" "}
                               {new Date(
                                 flag.created_at
                               ).toLocaleString()}
@@ -1167,6 +1281,7 @@ const AdminPage: React.FC = () => {
 
                         {flag.status === "active" && (
                           <button
+                            type="button"
                             onClick={() =>
                               handleResolveFlag(flag.id)
                             }
@@ -1183,6 +1298,7 @@ const AdminPage: React.FC = () => {
                             ) : (
                               <CheckCircle size={16} />
                             )}
+
                             Resolve
                           </button>
                         )}
@@ -1197,7 +1313,11 @@ const AdminPage: React.FC = () => {
                       size={36}
                       className="mx-auto mb-3 opacity-50"
                     />
-                    <p className="font-semibold">No flags yet</p>
+
+                    <p className="font-semibold">
+                      No flags yet
+                    </p>
+
                     <p className="text-sm mt-1">
                       Flagged users will appear here.
                     </p>
@@ -1214,6 +1334,7 @@ const AdminPage: React.FC = () => {
             <section>
               <div className="mb-4">
                 <h3 className="font-bold text-lg">Rewards</h3>
+
                 <p className="text-sm text-muted-foreground">
                   Current redeemable rewards.
                 </p>
@@ -1265,7 +1386,10 @@ const AdminPage: React.FC = () => {
           {activeTab === "redemptions" && (
             <section className="bg-card border border-border rounded-xl shadow-card overflow-hidden">
               <div className="p-5 border-b border-border">
-                <h3 className="font-bold text-lg">Redemptions</h3>
+                <h3 className="font-bold text-lg">
+                  Redemptions
+                </h3>
+
                 <p className="text-sm text-muted-foreground">
                   Monitor user reward redemptions.
                 </p>
@@ -1278,15 +1402,19 @@ const AdminPage: React.FC = () => {
                       <th className="px-5 py-3 font-semibold">
                         User
                       </th>
+
                       <th className="px-5 py-3 font-semibold">
                         Reward
                       </th>
+
                       <th className="px-5 py-3 font-semibold">
                         Coins
                       </th>
+
                       <th className="px-5 py-3 font-semibold">
                         Status
                       </th>
+
                       <th className="px-5 py-3 font-semibold">
                         Date
                       </th>
@@ -1294,30 +1422,32 @@ const AdminPage: React.FC = () => {
                   </thead>
 
                   <tbody className="divide-y divide-border">
-                    {redemptions.map((r) => (
+                    {redemptions.map((redemption) => (
                       <tr
-                        key={r.id}
+                        key={redemption.id}
                         className="hover:bg-muted/30"
                       >
                         <td className="px-5 py-4 font-semibold">
-                          {r.user_name}
+                          {redemption.user_name}
                         </td>
 
                         <td className="px-5 py-4">
-                          {r.reward_title}
+                          {redemption.reward_title}
                         </td>
 
                         <td className="px-5 py-4 font-bold text-coin-foreground">
-                          -{r.coins_spent.toLocaleString()}
+                          -{redemption.coins_spent.toLocaleString()}
                         </td>
 
                         <td className="px-5 py-4">
-                          <RedemptionStatus status={r.status} />
+                          <RedemptionStatus
+                            status={redemption.status}
+                          />
                         </td>
 
                         <td className="px-5 py-4 text-muted-foreground">
                           {new Date(
-                            r.redeemed_at
+                            redemption.redeemed_at
                           ).toLocaleString()}
                         </td>
                       </tr>
@@ -1340,7 +1470,14 @@ const AdminPage: React.FC = () => {
           FLAG USER MODAL
           ====================================================== */}
       {flagDialogOpen && selectedUser && (
-        <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4">
+        <div
+          className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeFlagDialog();
+            }
+          }}
+        >
           <div
             className="w-full max-w-md bg-card border border-border rounded-2xl shadow-xl"
             role="dialog"
@@ -1363,16 +1500,16 @@ const AdminPage: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => setFlagDialogOpen(false)}
-                className="p-2 rounded-lg hover:bg-muted transition-colors"
-                aria-label="Close"
+                onClick={closeFlagDialog}
+                disabled={flagging}
+                className="p-2 rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+                aria-label="Close flag dialog"
               >
                 <X size={20} />
               </button>
             </div>
 
             <div className="p-5 space-y-5">
-              {/* Reason */}
               <div>
                 <label
                   htmlFor="flag-reason"
@@ -1384,10 +1521,14 @@ const AdminPage: React.FC = () => {
                 <select
                   id="flag-reason"
                   value={flagReason}
-                  onChange={(e) => setFlagReason(e.target.value)}
+                  onChange={(event) =>
+                    setFlagReason(event.target.value)
+                  }
                   className="w-full px-4 py-3 rounded-lg border border-input bg-background outline-none focus:ring-2 focus:ring-primary/20"
                 >
-                  <option value="">Select a reason</option>
+                  <option value="">
+                    Select a reason
+                  </option>
 
                   {FLAG_REASONS.map((reason) => (
                     <option key={reason} value={reason}>
@@ -1397,7 +1538,6 @@ const AdminPage: React.FC = () => {
                 </select>
               </div>
 
-              {/* Custom reason */}
               {flagReason === "Other" && (
                 <div>
                   <label
@@ -1410,47 +1550,40 @@ const AdminPage: React.FC = () => {
                   <textarea
                     id="custom-flag-reason"
                     rows={4}
+                    value={customFlagReason}
+                    onChange={(event) =>
+                      setCustomFlagReason(event.target.value)
+                    }
                     placeholder="Describe the issue..."
-                    value={
-                      flagReason === "Other"
-                        ? ""
-                        : flagReason
-                    }
-                    onChange={(e) =>
-                      setFlagReason(
-                        e.target.value || "Other"
-                      )
-                    }
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background outline-none focus:ring-2 focus:ring-primary/20 resize-none"
                   />
                 </div>
               )}
 
-              {/* Severity */}
               <div>
                 <p className="block text-sm font-semibold mb-2">
                   Severity
                 </p>
 
                 <div className="grid grid-cols-3 gap-2">
-                  {(["low", "medium", "high"] as const).map(
-                    (severity) => (
-                      <button
-                        type="button"
-                        key={severity}
-                        onClick={() =>
-                          setFlagSeverity(severity)
-                        }
-                        className={`px-3 py-2.5 rounded-lg border text-sm font-semibold capitalize transition-colors ${
-                          flagSeverity === severity
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border hover:bg-muted"
-                        }`}
-                      >
-                        {severity}
-                      </button>
-                    )
-                  )}
+                  {(
+                    ["low", "medium", "high"] as const
+                  ).map((severity) => (
+                    <button
+                      type="button"
+                      key={severity}
+                      onClick={() =>
+                        setFlagSeverity(severity)
+                      }
+                      className={`px-3 py-2.5 rounded-lg border text-sm font-semibold capitalize transition-colors ${
+                        flagSeverity === severity
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border hover:bg-muted"
+                      }`}
+                    >
+                      {severity}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
@@ -1458,7 +1591,7 @@ const AdminPage: React.FC = () => {
             <div className="p-5 border-t border-border flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setFlagDialogOpen(false)}
+                onClick={closeFlagDialog}
                 disabled={flagging}
                 className="px-4 py-2.5 rounded-lg border border-border font-semibold text-sm hover:bg-muted disabled:opacity-50"
               >
@@ -1467,24 +1600,47 @@ const AdminPage: React.FC = () => {
 
               <button
                 type="button"
-                onClick={handleFlagUser}
-                disabled={flagging || !flagReason}
+                onClick={() => void handleFlagUser()}
+                disabled={
+                  flagging ||
+                  !flagReason ||
+                  (flagReason === "Other" &&
+                    !customFlagReason.trim())
+                }
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-destructive text-destructive-foreground font-semibold text-sm disabled:opacity-50"
               >
                 {flagging ? (
-                  <Loader2 size={16} className="animate-spin" />
+                  <Loader2
+                    size={16}
+                    className="animate-spin"
+                  />
                 ) : (
                   <Flag size={16} />
                 )}
+
                 Flag User
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ======================================================
+          USER DETAILS
+          ====================================================== */}
+      {selectedUserForDetails && (
+        <AdminUserDetails
+          user={selectedUserForDetails}
+          onClose={() => setSelectedUserForDetails(null)}
+        />
+      )}
     </>
   );
 };
+
+// ============================================================
+// STAT CARD
+// ============================================================
 
 const StatCard: React.FC<{
   icon: React.ElementType;
@@ -1506,20 +1662,29 @@ const StatCard: React.FC<{
   </div>
 );
 
+// ============================================================
+// INFO CARD
+// ============================================================
+
 const InfoCard: React.FC<{
   title: string;
   value: string;
 }> = ({ title, value }) => (
   <div className="bg-card border border-border rounded-xl p-5 shadow-card">
     <p className="text-sm text-muted-foreground">{title}</p>
+
     <p className="text-2xl font-bold mt-1">{value}</p>
   </div>
 );
 
-const StatusBadge: React.FC<{ status: ReportStatus }> = ({
-  status,
-}) => {
-  const config = {
+// ============================================================
+// REPORT STATUS
+// ============================================================
+
+const StatusBadge: React.FC<{
+  status: ReportStatus;
+}> = ({ status }) => {
+  const classes = {
     Pending: "bg-warning/15 text-warning",
     Approved: "bg-success/15 text-success",
     Rejected: "bg-destructive/15 text-destructive",
@@ -1527,17 +1692,21 @@ const StatusBadge: React.FC<{ status: ReportStatus }> = ({
 
   return (
     <span
-      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${config[status]}`}
+      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${classes[status]}`}
     >
       {status}
     </span>
   );
 };
 
+// ============================================================
+// FLAG SEVERITY
+// ============================================================
+
 const FlagSeverityBadge: React.FC<{
   severity: FlagSeverity;
 }> = ({ severity }) => {
-  const config = {
+  const classes = {
     low: "bg-muted text-muted-foreground",
     medium: "bg-warning/15 text-warning",
     high: "bg-destructive/15 text-destructive",
@@ -1545,34 +1714,42 @@ const FlagSeverityBadge: React.FC<{
 
   return (
     <span
-      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${config[severity]}`}
+      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${classes[severity]}`}
     >
       {severity}
     </span>
   );
 };
 
+// ============================================================
+// FLAG STATUS
+// ============================================================
+
 const FlagStatusBadge: React.FC<{
   status: FlagStatus;
 }> = ({ status }) => {
-  const config = {
+  const classes = {
     active: "bg-destructive/15 text-destructive",
     resolved: "bg-success/15 text-success",
   };
 
   return (
     <span
-      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${config[status]}`}
+      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${classes[status]}`}
     >
       {status}
     </span>
   );
 };
 
+// ============================================================
+// REDEMPTION STATUS
+// ============================================================
+
 const RedemptionStatus: React.FC<{
-  status: Redemption["status"];
+  status: RedemptionStatus;
 }> = ({ status }) => {
-  const config = {
+  const classes = {
     pending: "bg-warning/15 text-warning",
     approved: "bg-primary/15 text-primary",
     claimed: "bg-success/15 text-success",
@@ -1581,7 +1758,7 @@ const RedemptionStatus: React.FC<{
 
   return (
     <span
-      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${config[status]}`}
+      className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${classes[status]}`}
     >
       {status}
     </span>
