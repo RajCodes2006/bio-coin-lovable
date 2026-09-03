@@ -2,13 +2,9 @@ import React from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth-context";
 
-/**
- * Wraps routes that require an admin user. Non-admins are sent to
- * /home; logged-out users are sent to login (via ProtectedRoute's
- * usual behavior — this assumes auth loading has already resolved
- * because it's meant to be nested inside ProtectedRoute).
- */
-const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const AdminRoute: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const { user, loading } = useAuth();
 
   if (loading) {
@@ -23,7 +19,7 @@ const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     return <Navigate to="/" replace />;
   }
 
-  if (!user.isAdmin) {
+  if (user.role !== "admin") {
     return <Navigate to="/home" replace />;
   }
 
