@@ -1,6 +1,4 @@
-# Welcome to your SIH project
-
-🌱 BIO-COIN – Rewarding Cleanliness Through Incentives
+# 🌱 BIO-COIN – Rewarding Cleanliness Through Incentives
 
 BIO-COIN is a web-based platform designed to encourage people to keep their surroundings clean by rewarding their efforts. The idea is simple — users report waste collection activities and earn Bio-Coins, which can be redeemed for real-life benefits.
 
