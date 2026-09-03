@@ -1,4 +1,4 @@
-# Welcome to your Lovable project
+# Welcome to your SIH project
 
 🌱 BIO-COIN – Rewarding Cleanliness Through Incentives
 
