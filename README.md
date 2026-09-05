@@ -1,7 +1,5 @@
-<<<<<<< HEAD
+
 # 🌱 BIO-COIN – Rewarding Cleanliness Through Incentives
-=======
-# 🌱 BIO-COIN
 
 ### Rewarding Cleanliness Through Incentives
 
