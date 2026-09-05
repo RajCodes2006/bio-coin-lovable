@@ -4,7 +4,6 @@
 # 🌱 BIO-COIN
 
 ### Rewarding Cleanliness Through Incentives
->>>>>>> afc2b78 (Improve role based authentication and coin system)
 
 BIO-COIN is a web-based civic engagement platform designed to encourage citizens to actively participate in waste collection and cleanliness activities by rewarding their contributions with **Bio-Coins**.
 
